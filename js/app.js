@@ -13,6 +13,8 @@ const App = (() => {
   let lastClipId = null;
   let currentClipSize = 0;
   let recordingStartTime = 0;
+  let motionConsecutive = 0; // consecutive samples above threshold
+  let graceTimerRunning = false; // true once grace countdown started
 
   // ─── DOM refs ───
   const $ = (sel) => document.querySelector(sel);
@@ -78,6 +80,7 @@ const App = (() => {
   function wireNavigation() {
     $$('.nav-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        console.log('[nav] switching to tab:', btn.dataset.tab);
         const tab = btn.dataset.tab;
         $$('.nav-btn').forEach(b => b.classList.remove('active'));
         $$('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -159,6 +162,8 @@ const App = (() => {
     currentClipSize = 0;
     isRecording = false;
     motionActive = false;
+    motionConsecutive = 0;
+    graceTimerRunning = false;
 
     console.log('Camera stopped');
   }
@@ -166,8 +171,9 @@ const App = (() => {
   // ─── Motion Detection ───
   function handleMotionSample({ score, diffData }) {
     const sensitivity = Settings.current.sensitivity;
-    // Map sensitivity: at 50%, threshold is ~3% of pixels. At 100%, ~0.5%. At 1%, ~30%.
-    const threshold = Math.max(0.5, (101 - sensitivity) * 0.3);
+    // Map sensitivity: at 50%, threshold is ~3%. At 100%, ~0.1%. At 1%, ~6%.
+    const threshold = Math.max(0.1, (101 - sensitivity) * 0.06);
+    console.log('[motion] score:', score + '%', 'threshold:', threshold + '%', 'motion:', score >= threshold);
 
     // Update UI
     motionBar.style.width = score + '%';
@@ -200,28 +206,42 @@ const App = (() => {
       diffCtx.putImageData(diffData, 0, 0);
     }
 
-    // Determine motion state
+    // Determine motion state with hysteresis — require consecutive samples
     const isMotion = score >= threshold;
+    if (isMotion) {
+      motionConsecutive++;
+    } else {
+      motionConsecutive = 0;
+    }
+    // Need at least 2 consecutive samples above threshold to avoid sensor noise
+    const confirmedMotion = motionConsecutive >= 2;
 
-    if (isMotion && !motionActive) {
+    if (confirmedMotion && !motionActive) {
       // Motion just started
       motionActive = true;
+      graceTimerRunning = false;
       indicator.className = 'indicator motion';
       motionLabel.textContent = 'Motion!';
       motionBar.classList.add('motion');
       startRecordingIfNot();
-      console.log('Motion detected:', score + '%');
-    } else if (isMotion) {
+      console.log('[motion] detected:', score + '%', '(confirmed after', motionConsecutive, 'samples)');
+    } else if (confirmedMotion) {
       // Motion ongoing — reset grace timer
       indicator.className = 'indicator motion';
       motionLabel.textContent = 'Motion!';
+      graceTimerRunning = false;
       resetMotionGrace();
-    } else if (!isMotion && motionActive) {
-      // Motion just stopped
+      console.log('[grace] reset, recording?', !!mediaRecorder, 'state:', mediaRecorder ? mediaRecorder.state : 'n/a');
+    } else if (!confirmedMotion && motionActive && !graceTimerRunning) {
+      // Motion just stopped — start grace countdown (only once)
+      graceTimerRunning = true;
       indicator.className = 'indicator';
       motionLabel.textContent = 'Last seen';
       motionBar.classList.remove('motion');
       startMotionGrace();
+      console.log('[grace] started, timer for', Settings.current.gracePeriod, 's');
+    } else if (!confirmedMotion && motionActive && graceTimerRunning) {
+      // Grace timer is counting — do nothing
     } else {
       // No motion
       indicator.className = 'indicator';
@@ -233,7 +253,9 @@ const App = (() => {
   function startMotionGrace() {
     stopMotionGrace();
     motionTimeout = setTimeout(() => {
+      console.log('[grace] timer fired! motionActive:', motionActive, 'recording?', mediaRecorder ? mediaRecorder.state : 'n/a');
       motionActive = false;
+      graceTimerRunning = false;
       stopRecordingIfMotionStopped();
     }, Settings.current.gracePeriod * 1000);
   }
@@ -241,7 +263,9 @@ const App = (() => {
   function resetMotionGrace() {
     stopMotionGrace();
     motionTimeout = setTimeout(() => {
+      console.log('[grace] timer fired! motionActive:', motionActive, 'recording?', mediaRecorder ? mediaRecorder.state : 'n/a');
       motionActive = false;
+      graceTimerRunning = false;
       stopRecordingIfMotionStopped();
     }, Settings.current.gracePeriod * 1000);
   }
@@ -260,6 +284,7 @@ const App = (() => {
     try {
       const mimeType = Settings.getMimeType();
       const bitrate = Settings.getBitrate();
+      console.log('[recorder] MIME:', mimeType, 'bitrate:', bitrate);
 
       chunks = [];
       currentClipSize = 0;
@@ -270,6 +295,7 @@ const App = (() => {
       });
 
       mediaRecorder.ondataavailable = (e) => {
+        console.log('[recorder] dataavailable:', e.data.size, 'bytes, total chunks:', chunks.length + 1);
         if (e.data.size > 0) {
           chunks.push(e.data);
           currentClipSize += e.data.size;
@@ -280,34 +306,46 @@ const App = (() => {
         const elapsed = (Date.now() - recordingStartTime) / 1000;
         const totalSize = chunks.reduce((s, c) => s + c.size, 0);
 
+        console.log('Recording stopped:', { elapsed: elapsed.toFixed(1) + 's', totalSize: formatBytes(totalSize), chunks: chunks.length });
+
+        if (totalSize === 0) {
+          console.warn('Recording produced no data — clip discarded');
+          toast('Recording produced no data. Try a different format.', 4000);
+        }
+
         if (totalSize > 0) {
-          const blob = new Blob(chunks, { type: mimeType });
-          const ext = Settings.getExtensions();
-          const ts = new Date().toISOString().replace(/[:.]/g, '-');
-          const name = 'motion-' + ts + ext;
+          try {
+            const blob = new Blob(chunks, { type: mimeType });
+            const ext = Settings.getExtensions();
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            const name = 'motion-' + ts + ext;
 
-          const clip = {
-            id: crypto.randomUUID(),
-            name,
-            timestamp: Date.now(),
-            duration: elapsed,
-            size: blob.size,
-            format: ext,
-            blob: blob
-          };
+            const clip = {
+              id: crypto.randomUUID(),
+              name,
+              timestamp: Date.now(),
+              duration: elapsed,
+              size: blob.size,
+              format: ext,
+              blob: blob
+            };
 
-          await ClipStore.add(clip);
-          lastClipId = clip.id;
+            await ClipStore.add(clip);
+            lastClipId = clip.id;
 
-          // Enforce max clips
-          const count = await ClipStore.count();
-          if (count > Settings.current.maxClips) {
-            await enforceMaxClips();
+            // Enforce max clips
+            const count = await ClipStore.count();
+            if (count > Settings.current.maxClips) {
+              await enforceMaxClips();
+            }
+
+            updateClipCount();
+            toast('Clip saved: ' + name, 3000);
+            console.log('Clip saved:', name, formatBytes(blob.size));
+          } catch (err) {
+            console.error('Failed to save clip:', err);
+            toast('Failed to save clip: ' + err.message, 5000);
           }
-
-          updateClipCount();
-          toast('Clip saved: ' + name, 3000);
-          console.log('Clip saved:', name, formatBytes(blob.size));
         }
 
         isRecording = false;
@@ -332,6 +370,7 @@ const App = (() => {
   }
 
   function stopRecordingIfMotionStopped() {
+    console.log('[stop] checking: mediaRecorder?', !!mediaRecorder, 'state:', mediaRecorder ? mediaRecorder.state : 'n/a', 'isRecording:', isRecording);
     if (mediaRecorder && mediaRecorder.state === 'recording') {
       const elapsed = (Date.now() - recordingStartTime) / 1000;
 
@@ -399,6 +438,7 @@ const App = (() => {
   async function renderClips() {
     const clips = await ClipStore.list();
     const count = clips.length;
+    console.log('[clips] rendered', count, 'clips, noClipsMsg visible:', !count);
     updateClipCount();
 
     // Update action buttons
@@ -450,10 +490,10 @@ const App = (() => {
         return function () { openClipModal(id); };
       })(clip.id));
       card.querySelector('[data-action="download"]').addEventListener('click', (function (id) {
-        return function () { downloadClip(id); };
+        return function (e) { e.stopPropagation(); downloadClip(id); };
       })(clip.id));
       card.querySelector('[data-action="delete"]').addEventListener('click', (function (id) {
-        return function () { deleteClip(id); };
+        return function (e) { e.stopPropagation(); deleteClip(id); };
       })(clip.id));
     }
   }

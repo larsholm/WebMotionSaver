@@ -67,15 +67,17 @@ const Settings = (() => {
   }
 
   function getMimeType() {
+    // When audio is not included in the stream, use video-only codecs
+    // VP8 has the broadest support for video-only MediaRecorder
     const formats = {
       webm: [
-        'video/webm;codecs=vp9,opus',
-        'video/webm;codecs=vp8,opus',
+        'video/webm;codecs=vp8',
+        'video/webm;codecs=vp9',
         'video/webm'
       ],
       mp4: [
-        'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-        'video/mp4;codecs=avc1,mp4a',
+        'video/mp4;codecs=avc1.42E01E',
+        'video/mp4;codecs=avc1',
         'video/mp4'
       ]
     };
@@ -83,8 +85,8 @@ const Settings = (() => {
     for (const mime of list) {
       if (MediaRecorder.isTypeSupported(mime)) return mime;
     }
-    // Fallback to whatever works
-    return MediaRecorder.mimeType || 'video/webm';
+    // Fallback
+    return 'video/webm';
   }
 
   function getBitrate() {
