@@ -13,8 +13,8 @@ const App = (() => {
   let lastClipId = null;
   let currentClipSize = 0;
   let recordingStartTime = 0;
-  let motionConsecutive = 0; // consecutive samples above threshold
-  let graceTimerRunning = false; // true once grace countdown started
+  let motionConsecutive = 0;
+  let graceTimerRunning = false;
 
   // ─── DOM refs ───
   const $ = (sel) => document.querySelector(sel);
@@ -34,7 +34,6 @@ const App = (() => {
   const statusClipCount = $('#status-clip-count');
   const clipsGrid = $('#clips-grid');
   const noClipsMsg = $('#no-clips-msg');
-  const clipCountBadge = $('#clip-count-badge');
   const btnStart = $('#btn-start');
   const btnStop = $('#btn-stop');
   const btnCapture = $('#btn-capture');
@@ -56,7 +55,6 @@ const App = (() => {
     populateDeviceSelect();
 
     // Wire up events
-    wireNavigation();
     wireCameraButtons();
     wireSettingsForm();
     wireModal();
@@ -74,25 +72,6 @@ const App = (() => {
     });
 
     console.log('WebMotion Saver initialized');
-  }
-
-  // ─── Navigation ───
-  function wireNavigation() {
-    $$('.nav-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        console.log('[nav] switching to tab:', btn.dataset.tab);
-        const tab = btn.dataset.tab;
-        $$('.nav-btn').forEach(b => b.classList.remove('active'));
-        $$('.tab-panel').forEach(p => p.classList.remove('active'));
-        btn.classList.add('active');
-        $(`#tab-${tab}`).classList.add('active');
-
-        if (tab === 'clips') {
-          renderClips();
-          updateStorageDisplay();
-        }
-      });
-    });
   }
 
   // ─── Camera Controls ───
@@ -124,6 +103,9 @@ const App = (() => {
 
         // Start motion analysis
         MotionDetector.start(video, Settings.current.sampleRate, handleMotionSample);
+
+        // Refresh device labels now that permission is granted
+        refreshDeviceLabels();
 
         console.log('Camera started:', video.videoWidth + 'x' + video.videoHeight);
       }, { once: true });
@@ -173,7 +155,6 @@ const App = (() => {
     const sensitivity = Settings.current.sensitivity;
     // Map sensitivity: at 50%, threshold is ~3%. At 100%, ~0.1%. At 1%, ~6%.
     const threshold = Math.max(0.1, (101 - sensitivity) * 0.06);
-    console.log('[motion] score:', score + '%', 'threshold:', threshold + '%', 'motion:', score >= threshold);
 
     // Update UI
     motionBar.style.width = score + '%';
@@ -340,6 +321,7 @@ const App = (() => {
             }
 
             updateClipCount();
+            renderClips();
             toast('Clip saved: ' + name, 3000);
             console.log('Clip saved:', name, formatBytes(blob.size));
           } catch (err) {
@@ -370,7 +352,6 @@ const App = (() => {
   }
 
   function stopRecordingIfMotionStopped() {
-    console.log('[stop] checking: mediaRecorder?', !!mediaRecorder, 'state:', mediaRecorder ? mediaRecorder.state : 'n/a', 'isRecording:', isRecording);
     if (mediaRecorder && mediaRecorder.state === 'recording') {
       const elapsed = (Date.now() - recordingStartTime) / 1000;
 
@@ -438,7 +419,6 @@ const App = (() => {
   async function renderClips() {
     const clips = await ClipStore.list();
     const count = clips.length;
-    console.log('[clips] rendered', count, 'clips, noClipsMsg visible:', !count);
     updateClipCount();
 
     // Update action buttons
@@ -461,7 +441,7 @@ const App = (() => {
       card.className = 'clip-card';
       card.innerHTML =
         '<div class="clip-thumb" data-id="' + clip.id + '">' +
-          '<video src="" muted></video>' +
+          '<video src="" muted playsinline preload="auto"></video>' +
         '</div>' +
         '<div class="clip-info">' +
           '<div class="clip-meta">' +
@@ -475,20 +455,36 @@ const App = (() => {
         '</div>';
       clipsGrid.appendChild(card);
 
-      // Generate thumbnail from blob
-      var thumbVideo = card.querySelector('.clip-thumb video');
-      var blob = await ClipStore.getBlob(clip.id);
-      if (blob) {
-        thumbVideo.src = URL.createObjectURL(blob);
-        thumbVideo.addEventListener('loadeddata', function () {
-          thumbVideo.currentTime = 0.5;
-        }, { once: true });
-      }
+      // Generate thumbnail from blob (IIFE to capture per-card refs)
+      (async function (tv, thumb, clipId) {
+        var blob = await ClipStore.getBlob(clipId);
+        if (blob) {
+          tv.src = URL.createObjectURL(blob);
+          tv.addEventListener('loadeddata', function () {
+            tv.currentTime = 0.5;
+          }, { once: true });
+        }
 
-      // Click to open modal
-      card.querySelector('.clip-thumb').addEventListener('click', (function (id) {
-        return function () { openClipModal(id); };
-      })(clip.id));
+        // Play on hover, loop while hovering
+        var hoverTimer = null;
+        thumb.addEventListener('mouseenter', function () {
+          hoverTimer = setTimeout(function () {
+            tv.currentTime = 0;
+            tv.loop = true;
+            tv.play();
+          }, 150);
+        });
+        thumb.addEventListener('mouseleave', function () {
+          clearTimeout(hoverTimer);
+          tv.pause();
+          tv.loop = false;
+          tv.currentTime = 0.5;
+        });
+
+        // Click to open modal
+        thumb.addEventListener('click', function () { openClipModal(clipId); });
+      })(card.querySelector('.clip-thumb video'), card.querySelector('.clip-thumb'), clip.id);
+
       card.querySelector('[data-action="download"]').addEventListener('click', (function (id) {
         return function (e) { e.stopPropagation(); downloadClip(id); };
       })(clip.id));
@@ -618,29 +614,41 @@ const App = (() => {
   async function populateDeviceSelect() {
     var select = $('#setting-device');
     try {
-      var tmpStream = await navigator.mediaDevices.getUserMedia({ video: true });
-      tmpStream.getTracks().forEach(function (t) { t.stop(); });
-
+      // Enumerate first without requesting camera access
       var devices = await Settings.enumerateDevices();
       select.innerHTML = '<option value="">Auto-select</option>';
       devices.forEach(function (d) {
         var opt = document.createElement('option');
         opt.value = d.deviceId;
-        opt.textContent = d.label || 'Camera ' + d.deviceId.slice(0, 8) + '...';
+        opt.textContent = d.label || ('Camera ' + d.deviceId.slice(0, 8));
         if (d.deviceId === Settings.current.deviceId) opt.selected = true;
         select.appendChild(opt);
       });
     } catch (e) {
-      // Permission denied — keep auto-select only
+      console.warn('Failed to enumerate devices:', e);
     }
+  }
+
+  function refreshDeviceLabels() {
+    navigator.mediaDevices.enumerateDevices().then(function (devices) {
+      var select = $('#setting-device');
+      if (select.options.length <= 1) return; // still just auto-select
+      devices.forEach(function (d) {
+        if (d.kind !== 'videoinput') return;
+        for (var i = 0; i < select.options.length; i++) {
+          if (select.options[i].value === d.deviceId) {
+            select.options[i].textContent = d.label || ('Camera ' + d.deviceId.slice(0, 8));
+            break;
+          }
+        }
+      });
+    });
   }
 
   // ─── Helpers ───
   function updateClipCount() {
     ClipStore.count().then(function (count) {
       statusClipCount.textContent = count;
-      clipCountBadge.textContent = count;
-      clipCountBadge.classList.toggle('visible', count > 0);
     });
   }
 
