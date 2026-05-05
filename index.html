@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebMotion Saver — Privacy-First Surveillance</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header>
+    <h1>📹 WebMotion Saver</h1>
+    <p class="subtitle">All processing happens in your browser — your camera data never leaves your device.</p>
+    <nav>
+      <button class="nav-btn active" data-tab="camera">📷 Camera</button>
+      <button class="nav-btn" data-tab="clips">🎬 Clips <span id="clip-count-badge"></span></button>
+      <button class="nav-btn" data-tab="settings">⚙️ Settings</button>
+    </nav>
+  </header>
+
+  <!-- CAMERA TAB -->
+  <main id="tab-camera" class="tab-panel active">
+    <div class="camera-layout">
+      <div class="video-container">
+        <video id="camera-feed" autoplay playsinline muted></video>
+        <canvas id="motion-overlay" class="motion-overlay"></canvas>
+        <div id="camera-placeholder" class="placeholder">
+          <div class="placeholder-icon">📷</div>
+          <p>Click <strong>Start Camera</strong> to begin</p>
+          <p class="hint">Camera access is required for motion detection.</p>
+        </div>
+        <div id="camera-status" class="camera-status hidden">
+          <span id="motion-indicator" class="indicator">●</span>
+          <span id="motion-label">Idle</span>
+        </div>
+      </div>
+      <div class="camera-controls">
+        <button id="btn-start" class="btn btn-primary">Start Camera</button>
+        <button id="btn-stop" class="btn btn-danger hidden">Stop Camera</button>
+        <button id="btn-capture" class="btn btn-secondary hidden">📸 Snapshot</button>
+        <div class="status-panel">
+          <h3>Detection Status</h3>
+          <div class="status-grid">
+            <div class="status-item">
+              <label>State</label>
+              <span id="status-state">Stopped</span>
+            </div>
+            <div class="status-item">
+              <label>Motion Score</label>
+              <div class="progress-bar">
+                <div id="motion-bar" class="progress-fill" style="width:0%"></div>
+              </div>
+              <span id="status-score">0%</span>
+            </div>
+            <div class="status-item">
+              <label>Recording</label>
+              <span id="status-recording">—</span>
+            </div>
+            <div class="status-item">
+              <label>Clips Saved</label>
+              <span id="status-clip-count">0</span>
+            </div>
+          </div>
+        </div>
+        <div class="sensitivity-preview">
+          <h3>Sensitivity Preview</h3>
+          <div class="canvas-row">
+            <canvas id="diff-canvas" class="diff-preview" width="240" height="135"></canvas>
+          </div>
+          <p class="hint">Red areas show pixel changes between frames.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- CLIPS TAB -->
+  <main id="tab-clips" class="tab-panel">
+    <div class="clips-header">
+      <h2>Recorded Clips</h2>
+      <div class="clips-actions">
+        <button id="btn-download-all" class="btn btn-small" disabled>⬇ Download All</button>
+        <button id="btn-delete-all" class="btn btn-small btn-danger" disabled>🗑 Clear All</button>
+      </div>
+    </div>
+    <div id="clips-grid" class="clips-grid">
+      <div class="placeholder" id="no-clips-msg">
+        <div class="placeholder-icon">🎬</div>
+        <p>No clips recorded yet.</p>
+        <p class="hint">Clips appear here automatically when motion is detected.</p>
+      </div>
+    </div>
+  </main>
+
+  <!-- SETTINGS TAB -->
+  <main id="tab-settings" class="tab-panel">
+    <h2>Settings</h2>
+    <form id="settings-form" class="settings-form">
+      <fieldset>
+        <legend>📷 Camera</legend>
+        <div class="form-group">
+          <label for="setting-resolution">Resolution</label>
+          <select id="setting-resolution">
+            <option value="320x240">320×240 (Low — fast detection)</option>
+            <option value="640x480">640×480 (Standard)</option>
+            <option value="1280x720" selected>1280×720 (HD)</option>
+            <option value="1920x1080">1920×1080 (Full HD)</option>
+          </select>
+          <p class="hint">Higher resolution = clearer clips but slower motion detection.</p>
+        </div>
+        <div class="form-group">
+          <label for="setting-device">Camera Device</label>
+          <select id="setting-device">
+            <option value="">Auto-select</option>
+          </select>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>🎯 Motion Detection</legend>
+        <div class="form-group">
+          <label for="setting-sensitivity">Sensitivity</label>
+          <input type="range" id="setting-sensitivity" min="1" max="100" value="50">
+          <span id="sensitivity-value">50%</span>
+          <p class="hint">Higher = detects even slight movement. Lower = ignores small changes.</p>
+        </div>
+        <div class="form-group">
+          <label for="setting-sample-rate">Sample Rate</label>
+          <select id="setting-sample-rate">
+            <option value="1000">1 fps (battery-friendly)</option>
+            <option value="500" selected>2 fps (balanced)</option>
+            <option value="333">3 fps</option>
+            <option value="200">5 fps (responsive)</option>
+            <option value="100">10 fps (very responsive)</option>
+          </select>
+          <p class="hint">How often frames are compared. Lower = more battery life.</p>
+        </div>
+        <div class="form-group">
+          <label for="setting-grace-period">Grace Period (seconds)</label>
+          <input type="number" id="setting-grace-period" min="1" max="120" value="5" step="1">
+          <p class="hint">Keep recording this long after the last motion is detected.</p>
+        </div>
+        <div class="form-group">
+          <label for="setting-min-duration">Minimum Clip Duration (seconds)</label>
+          <input type="number" id="setting-min-duration" min="1" max="60" value="2" step="1">
+          <p class="hint">Discard clips shorter than this to filter false positives.</p>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>🎬 Recording</legend>
+        <div class="form-group">
+          <label for="setting-quality">Quality</label>
+          <select id="setting-quality">
+            <option value="low">Low (smaller files)</option>
+            <option value="medium" selected>Medium (balanced)</option>
+            <option value="high">High (larger files)</option>
+          </select>
+          <p class="hint">Affects bitrate — higher quality means larger files.</p>
+        </div>
+        <div class="form-group">
+          <label for="setting-format">Format</label>
+          <select id="setting-format">
+            <option value="webm">WebM (VP8/VP9)</option>
+            <option value="mp4">MP4 (H.264 — if supported)</option>
+          </select>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>💾 Storage</legend>
+        <div class="form-group">
+          <label for="setting-max-clips">Max Clips to Keep</label>
+          <input type="number" id="setting-max-clips" min="10" max="1000" value="100" step="10">
+          <p class="hint">Oldest clips are deleted when this limit is reached.</p>
+        </div>
+        <div class="form-group">
+          <label>Storage Used</label>
+          <span id="storage-used">—</span>
+        </div>
+      </fieldset>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Save Settings</button>
+        <button type="button" id="btn-reset-settings" class="btn btn-secondary">Reset Defaults</button>
+      </div>
+    </form>
+  </main>
+
+  <!-- CLIP PLAYBACK MODAL -->
+  <div id="clip-modal" class="modal hidden">
+    <div class="modal-content">
+      <button class="modal-close" id="modal-close">✕</button>
+      <video id="modal-video" controls></video>
+      <div class="modal-info">
+        <p id="modal-clip-name"></p>
+        <p id="modal-clip-duration"></p>
+      </div>
+      <div class="modal-actions">
+        <button id="modal-download" class="btn btn-primary">⬇ Download</button>
+        <button id="modal-delete" class="btn btn-danger">🗑 Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- NOTIFICATION TOAST -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="js/storage.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/motion.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "web-motion-saver",
+  "version": "1.0.0",
+  "description": "Client-side motion detection surveillance camera — all processing in your browser",
+  "private": true,
+  "scripts": {
+    "start": "npx serve .",
+    "build": "echo 'No build step — static site'"
+  },
+  "devDependencies": {
+    "serve": "^14.2.6"
+  }
+}
