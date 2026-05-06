@@ -98,7 +98,7 @@ const App = (() => {
         // Initialize motion detector at 1/4 resolution for speed
         const detectW = Math.round(video.videoWidth / 4);
         const detectH = Math.round(video.videoHeight / 4);
-        MotionDetector.init(overlay, detectW, detectH);
+        MotionDetector.init(detectW, detectH);
         MotionDetector.reset(video);
         statusState.textContent = 'Running';
 
@@ -183,7 +183,9 @@ const App = (() => {
       }
       ctx.putImageData(overlayImg, 0, 0);
 
-      // Also update diff preview
+      // Scale diff preview to match detection size
+      diffCanvas.width = diffData.width;
+      diffCanvas.height = diffData.height;
       const diffCtx = diffCanvas.getContext('2d');
       diffCtx.putImageData(diffData, 0, 0);
     }

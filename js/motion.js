@@ -4,24 +4,21 @@
  * and reports the percentage of changed pixels.
  */
 const MotionDetector = (() => {
-  let prevFrame = null;
-  let canvas = null;
+  let analysisCanvas = null;
   let ctx = null;
   let width = 0;
   let height = 0;
+  let prevFrame = null;
   let sampleInterval = null;
 
-  /**
-   * Initialize the detector with a canvas element.
-   * Uses a smaller canvas for faster comparison.
-   */
-  function init(canvasEl, w, h) {
-    canvas = canvasEl;
+  function init(w, h) {
     width = w || 160;
     height = h || 120;
-    canvas.width = width;
-    canvas.height = height;
-    ctx = canvas.getContext('2d', { willReadFrequently: true });
+    // Dedicated offscreen canvas — exact detection size, no CSS stretching
+    analysisCanvas = document.createElement('canvas');
+    analysisCanvas.width = width;
+    analysisCanvas.height = height;
+    ctx = analysisCanvas.getContext('2d', { willReadFrequently: true });
     prevFrame = null;
   }
 
@@ -32,7 +29,6 @@ const MotionDetector = (() => {
   function analyze(videoEl) {
     if (!ctx || !videoEl.videoWidth) return { score: 0, diffData: null };
 
-    // Draw current frame to small canvas
     ctx.drawImage(videoEl, 0, 0, width, height);
     const currentData = ctx.getImageData(0, 0, width, height);
 
