@@ -15,6 +15,7 @@ const App = (() => {
   let recordingStartTime = 0;
   let motionConsecutive = 0;
   let graceTimerRunning = false;
+  let saveFolderHandle = null;
 
   // ─── DOM refs ───
   const $ = (sel) => document.querySelector(sel);
@@ -314,6 +315,9 @@ const App = (() => {
             await ClipStore.add(clip);
             lastClipId = clip.id;
 
+            // Save to disk if folder is selected
+            await saveClipToFolder(blob, name);
+
             // Enforce max clips
             const count = await ClipStore.count();
             if (count > Settings.current.maxClips) {
@@ -596,6 +600,56 @@ const App = (() => {
       applySettingsToUI();
       toast('Settings reset to defaults', 2000);
     });
+
+    $('#btn-select-folder').addEventListener('click', async function () {
+      await selectFolder();
+    });
+  }
+
+  async function selectFolder() {
+    // Check if File System Access API is available
+    if (!window.showDirectoryPicker) {
+      toast('Your browser does not support saving to disk. Try Chrome or Edge.', 4000);
+      return;
+    }
+
+    try {
+      // Show directory picker
+      const handle = await window.showDirectoryPicker({
+        mode: 'readwrite',
+        startIn: 'pictures'
+      });
+      saveFolderHandle = handle;
+      $('#folder-status').textContent = handle.name;
+      toast('Clips will be saved to: ' + handle.name, 2000);
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        // User cancelled
+        return;
+      }
+      console.error('Folder selection error:', err);
+      toast('Failed to select folder: ' + err.message, 4000);
+    }
+  }
+
+  async function saveClipToFolder(blob, filename) {
+    if (!saveFolderHandle) return;
+
+    try {
+      // Try to get or request permission
+      const permission = await saveFolderHandle.queryPermission({ mode: 'readwrite' });
+      if (permission !== 'granted') {
+        // Permission not active - ask user to re-grant
+        const result = await saveFolderHandle.requestPermission({ mode: 'readwrite' });
+        if (result !== 'granted') return;
+      }
+      const fileHandle = await saveFolderHandle.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+    } catch (err) {
+      console.warn('Failed to save clip to folder:', err);
+    }
   }
 
   function applySettingsToUI() {
